@@ -296,12 +296,10 @@ def check_for_update(session):
 
     if not remote_version:
         log("[speedyServiceScanUpdates] Keine Remote-Version gefunden.")
-        return
+        return False
 
     log("[speedyServiceScanUpdates] Lokale Version: %s" % current_version)
     log("[speedyServiceScanUpdates] Remote Version: %s" % remote_version)
-    log("[speedyServiceScanUpdates] Lokale Version (tuple): %s" % (parse_version(current_version),))
-    log("[speedyServiceScanUpdates] Remote Version (tuple): %s" % (parse_version(remote_version),))
 
     try:
         if parse_version(remote_version) > parse_version(current_version):
@@ -324,12 +322,15 @@ def check_for_update(session):
                 except Exception as e:
                     log("[speedyServiceScanUpdates] Konnte Update-MessageBox nicht öffnen: %s" % e)
 
-            # sofort ausführen
             ask_update()
+            return True  # Update vorhanden
         else:
             log("[speedyServiceScanUpdates] Kein Update verfügbar.")
+            return False
     except Exception as e:
         log("[speedyServiceScanUpdates] Fehler beim Vergleich der Versionen: %s" % e)
+        return False
+
 
 # --- Autostart Hook ---
 def autostart(reason, **kwargs):
@@ -348,28 +349,70 @@ def autostart(reason, **kwargs):
 
         log("[speedyServiceScanUpdates] Autostart: ServiceScan Wrapper aktiv, Updateprüfung entfällt beim Start.")
 
+
 # --- Menü & Setup ---
 def SSUMain(session, **kwargs):
     from .SSUSetupScreen import SSUSetupScreen
 
-    # Updateprüfung beim Öffnen des Plugins
     try:
-        check_for_update(session)
+        session.open(SSUSetupScreen)
     except Exception as e:
-        log("[speedyServiceScanUpdates] Fehler bei Updateprüfung beim Öffnen: %s" % e)
+        log("[speedyServiceScanUpdates] Fehler beim Öffnen des SetupScreens: %s" % e)
 
-    session.open(SSUSetupScreen)
+
+def precheck_update_and_open(session, **kwargs):
+    """
+    Updateprüfung vor Öffnen des SetupScreens.
+    MessageBox erscheint sofort über dem vorherigen Screen.
+    """
+    from .SSUSetupScreen import SSUSetupScreen
+
+    def open_plugin():
+        try:
+            session.open(SSUSetupScreen)
+        except Exception as e:
+            log("[speedyServiceScanUpdates] Fehler beim Öffnen des SetupScreens: %s" % e)
+
+    try:
+        current_version = get_current_version()
+        remote_version = get_remote_version()
+
+        if remote_version and parse_version(remote_version) > parse_version(current_version):
+            # Update verfügbar → MessageBox anzeigen
+            def callback(choice):
+                if choice:
+                    log("[speedyServiceScanUpdates] Benutzer bestätigt Update → starte Download")
+                    download_and_install_update(session)
+                else:
+                    log("[speedyServiceScanUpdates] Benutzer hat Update abgelehnt.")
+                    open_plugin()  # Plugin trotzdem öffnen
+
+            session.openWithCallback(
+                callback, MessageBox,
+                "Eine neue Version %s ist verfügbar.\nMöchten Sie das Update installieren?" % remote_version,
+                MessageBox.TYPE_YESNO
+            )
+        else:
+            # Kein Update → Plugin sofort öffnen
+            open_plugin()
+
+    except Exception as e:
+        log("[speedyServiceScanUpdates] Fehler bei Updateprüfung: %s" % e)
+        open_plugin()
+
 
 def SSUMenuItem(menuid, **kwargs):
     if menuid == "scan":
-        return [("speedy ServiceScanUpdates " + _("Setup"), SSUMain, "servicescanupdates", None)]
+        return [("speedy ServiceScanUpdates " + _("Setup"), precheck_update_and_open, "servicescanupdates", None)]
     return []
+
 
 def menu(menuid, **kwargs):
     if menuid == "mainmenu":
-        return [(_("speedyServiceScanUpdates") + " " + _("Setup"), SSUMain,
+        return [(_("speedyServiceScanUpdates") + " " + _("Setup"), precheck_update_and_open,
                  "speedyservicescanupdates_mainmenu", 50)]
     return []
+
 
 # --- Plugin Descriptor ---
 def Plugins(**kwargs):
@@ -380,12 +423,15 @@ def Plugins(**kwargs):
                          description=_("Updates during service scan"),
                          where=PluginDescriptor.WHERE_PLUGINMENU,
                          icon="plugin.png",
-                         fnc=SSUMain),
+                         fnc=precheck_update_and_open),
         PluginDescriptor(name="speedy ServiceScanUpdates " + _("Setup"),
                          description=_("Updates during service scan"),
                          where=PluginDescriptor.WHERE_EXTENSIONSMENU,
                          icon="plugin.png",
-                         fnc=SSUMain),
+                         fnc=precheck_update_and_open),
         PluginDescriptor(where=PluginDescriptor.WHERE_MENU, fnc=menu),
         PluginDescriptor(where=PluginDescriptor.WHERE_MENU, fnc=SSUMenuItem)
     ]
+
+
+

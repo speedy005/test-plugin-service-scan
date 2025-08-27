@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 import os
-import shutil
+import sys
 import zipfile
+import shutil
+import traceback
+import time
 
 try:
     import requests
@@ -20,19 +23,17 @@ for base in (
         break
 
 # --- Enigma2 imports ---
-from enigma import ePixmap, getDesktop, eTimer
+from enigma import ePixmap, eLabel, getDesktop, eTimer
 from Screens.Screen import Screen
 from Screens.MessageBox import MessageBox
-from Screens.Standby import TryQuitMainloop
 from Components.ConfigList import ConfigListScreen
 from Components.ActionMap import ActionMap
-from Components.Button import Button
 from Components.Label import Label
-from Components.ProgressBar import ProgressBar
 from Components.config import config, ConfigSubsection, ConfigYesNo, getConfigListEntry
 from Plugins.Plugin import PluginDescriptor
 from Tools.Directories import resolveFilename, SCOPE_CONFIG
-
+from Components.Button import Button
+# Local translations
 from . import _
 
 # ===== Version =====
@@ -41,7 +42,7 @@ def read_version():
         return "Unknown version"
     vf = os.path.join(plugin_path, "version.txt")
     try:
-        with open(vf, "r") as f:
+        with open(vf, "r", encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
         return "Unknown version"
@@ -85,6 +86,7 @@ class SSUSetupScreen(ConfigListScreen, Screen):
         self.session = session
         w = getDesktop(0).size().width()
 
+        # --- Skin definieren ---
         if w >= 1920:
             self.skin = """<screen name="SSUSetupScreen" position="center,170" size="1200,820" title="speedy Service Scan Setup" backgroundColor="black">
                 <ePixmap pixmap="skin_default/buttons/red.png" position="10,5" size="5,70" scale="stretch" alphatest="on" />
@@ -118,30 +120,57 @@ class SSUSetupScreen(ConfigListScreen, Screen):
                 <widget name="help" position="210,450" size="685,65" font="Regular;22" />
             </screen>"""
 
+        # --- Widgets ---
         self["version"] = Label(_("v %s") % version)
+        self["key_red"] = Button(_("Cancel"))
+        self["key_green"] = Button(_("Save"))
+        self["key_yellow"] = Button(_("Restore Default"))
+        self["key_blue"] = Button(_("Update"))
         self["help"] = Label(_("Configure the update options."))
 
-        self['actions'] = ActionMap(['ColorActions', 'OkCancelActions'], {
-            'red': self.cancel,
-            'green': self.save,
-            'yellow': self.restore_default,
-            'blue': self.openUpdate,   # Key Blue -> Update Screen
-            'ok': self.save,
-            'cancel': self.cancel
-        }, -1)
+        # --- Aktionen (inkl. EPG/Help-Taste) ---
+        self['actions'] = ActionMap(
+            ['ColorActions', 'OkCancelActions', 'HelpActions', 'EPGSelectActions'],
+            {
+                'red': self.cancel,
+                'green': self.save,
+                'yellow': self.restore_default,
+                'blue': self.openUpdate,
+                'ok': self.save,
+                'cancel': self.cancel,
+                'help': self.showHelp,
+                'epg': self.showHelp
+            },
+            -1
+        )
 
+        # ConfigList initialisieren
         self.onLayoutFinish.append(self.populateList)
+        self["config"].onSelectionChanged.append(self.updateHelp)
 
+    # ===== Methoden =====
     def populateList(self):
         self.list = [
-            getConfigListEntry(_("Add new TV services"), config.plugins.speedyservicescanupdates.add_new_tv_services, _("Create 'Service Scan Updates' bouquet for new TV services?")),
-            getConfigListEntry(_("Add new radio services"), config.plugins.speedyservicescanupdates.add_new_radio_services, _("Create 'Service Scan Updates' bouquet for new radio services?")),
-            getConfigListEntry(_("Clear bouquet at each search"), config.plugins.speedyservicescanupdates.clear_bouquet, _("Empty the 'Service Scan Updates' bouquet on every scan, otherwise the new services will be appended?"))
+            getConfigListEntry(
+                _("Add new TV services"),
+                config.plugins.speedyservicescanupdates.add_new_tv_services,
+                _("Create 'Service Scan Updates' bouquet for new TV services?")
+            ),
+            getConfigListEntry(
+                _("Add new radio services"),
+                config.plugins.speedyservicescanupdates.add_new_radio_services,
+                _("Create 'Service Scan Updates' bouquet for new radio services?")
+            ),
+            getConfigListEntry(
+                _("Clear bouquet at each search"),
+                config.plugins.speedyservicescanupdates.clear_bouquet,
+                _("Empty the 'Service Scan Updates' bouquet on every scan, otherwise the new services will be appended?")
+            )
         ]
         for entry in self.list:
             entry[1].helpText = entry[2]
         self["config"].list = self.list
-        self["config"].l.setList(self.list)
+        
 
     def restore_default(self):
         self.session.open(MessageBox, _("Default settings restored!"), MessageBox.TYPE_INFO, 3)
@@ -160,6 +189,22 @@ class SSUSetupScreen(ConfigListScreen, Screen):
         self.session.open(MessageBox, _("Changes saved!"), MessageBox.TYPE_INFO, 3)
         self.close()
 
+    def showHelp(self):
+        self.session.open(MessageBox, _("Configure the update options."), MessageBox.TYPE_INFO, 5)
+
+    def updateHelp(self):
+        # Bei ConfigList-Auswahl die Hilfe aktualisieren
+        if self["config"].getCurrent():
+            self["help"].setText(self["config"].getCurrent()[1].helpText)
+
+
+    def checkUpdate(self):
+        if SSUUpdateScreen:
+            self.session.open(SSUUpdateScreen, show_only=True)
+        else:
+            _safe_msg(self.session, _("Update screen not available."), MessageBox.TYPE_ERROR, 5)
+
+
 # ===== ServiceScan Hooks / Autostart =====
 _base_execBegin = None
 _base_execEnd = None
@@ -174,11 +219,9 @@ def _has(d, k):
     try:
         return k in d
     except Exception:
-        try:
-            return d.has_key(k)
-        except Exception:
-            return False
+        return False
 
+# Hooks bleiben größtenteils gleich, nur Python 3 kompatibel
 def ServiceScan_execBegin_hook(self, *args, **kwargs):
     global _preScanDB
     if SSULameDBParser and not _preScanDB:
