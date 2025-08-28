@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import print_function
+from __future__ import print_function, unicode_literals
 
 import os
 import sys
@@ -12,23 +12,23 @@ import gettext
 
 version = "3.5"
 
-# Python 2 kompatible urllib
+# Python 2/3 kompatible urllib
 try:
     import urllib2 as urllib_request
-except Exception:
+except ImportError:
     import urllib.request as urllib_request
 
 from Plugins.Plugin import PluginDescriptor
-from Components.config import config
+from Components.config import config, ConfigSubsection, ConfigYesNo
 from Tools.Directories import resolveFilename, SCOPE_CONFIG
 from Screens.MessageBox import MessageBox
 from Screens.Standby import TryQuitMainloop
 
-# Compatible import for ServiceScan
+# ServiceScan kompatibel importieren
 try:
-    from Screens.ServiceScan import ServiceScan  # Python 3
-except Exception:
-    from Components.ServiceScan import ServiceScan  # Python 2
+    from Screens.ServiceScan import ServiceScan
+except ImportError:
+    from Components.ServiceScan import ServiceScan
 
 from .SSULameDBParser import SSULameDBParser
 
@@ -48,7 +48,7 @@ if os.path.isdir(locale_dir):
     gettext.textdomain("speedyservicescanupdates")
     _ = gettext.gettext
 else:
-    _ = lambda s: s  # Fallback
+    _ = lambda s: s
 
 # ===== Globale Variablen =====
 baseServiceScan_execBegin = None
@@ -82,13 +82,25 @@ def safeClose(db):
         except Exception:
             pass
 
+# ===== Python 2/3 kompatible copytree =====
+def copytree_compat(src, dst):
+    if not os.path.exists(dst):
+        os.makedirs(dst)
+    for item in os.listdir(src):
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if os.path.isdir(s):
+            copytree_compat(s, d)
+        else:
+            shutil.copy2(s, d)
+
 # ===== ServiceScan Wrapper =====
 def ServiceScan_execBegin(self):
-    flags = None
+    flags = "N/A"
     try:
         flags = self.scanList[self.run]["flags"]
     except Exception:
-        flags = "N/A"
+        pass
     log("[speedyServiceScanUpdates] ServiceScan_execBegin [%s]" % str(flags))
 
     global preScanDB
@@ -98,17 +110,19 @@ def ServiceScan_execBegin(self):
             preScanDB = SSULameDBParser(resolveFilename(SCOPE_CONFIG) + "/lamedb")
     except Exception as e:
         log("[speedyServiceScanUpdates] Fehler beim Laden preScanDB: %s" % e)
+
     try:
-        baseServiceScan_execBegin(self)
+        if baseServiceScan_execBegin:
+            baseServiceScan_execBegin(self)
     except Exception as e:
         log("[speedyServiceScanUpdates] Fehler beim Aufruf baseServiceScan_execBegin: %s" % e)
 
 def ServiceScan_execEnd(self, onClose=True):
-    flags = None
+    flags = "N/A"
     try:
         flags = self.scanList[self.run]["flags"]
     except Exception:
-        flags = "N/A"
+        pass
 
     state_val = getattr(self, "state", -1)
     log("[speedyServiceScanUpdates] ServiceScan_execEnd (%d) [%s]" % (state_val, str(flags)))
@@ -136,35 +150,36 @@ def ServiceScan_execEnd(self, onClose=True):
                                 newRadioServices.append(service_ref)
 
                     from .SSUBouquetHandler import SSUBouquetHandler
-                    bouquet_handler = SSUBouquetHandler()
+                    bh = SSUBouquetHandler()
+
+                    def _apply(side, items):
+                        if not items:
+                            return
+                        bh.addToIndexBouquet(side)
+                        if config.plugins.speedyservicescanupdates.clear_bouquet.value:
+                            bh.createSSUBouquet(items, side)
+                        else:
+                            if bh.doesSSUBouquetFileExists(side):
+                                bh.appendToSSUBouquet(items, side)
+                            else:
+                                bh.createSSUBouquet(items, side)
 
                     if newTVServices and config.plugins.speedyservicescanupdates.add_new_tv_services.value:
-                        bouquet_handler.addToIndexBouquet("tv")
-                        if config.plugins.speedyservicescanupdates.clear_bouquet.value:
-                            bouquet_handler.createSSUBouquet(newTVServices, "tv")
-                        else:
-                            if bouquet_handler.doesSSUBouquetFileExists("tv"):
-                                bouquet_handler.appendToSSUBouquet(newTVServices, "tv")
-                            else:
-                                bouquet_handler.createSSUBouquet(newTVServices, "tv")
-
+                        _apply("tv", newTVServices)
                     if newRadioServices and config.plugins.speedyservicescanupdates.add_new_radio_services.value:
-                        bouquet_handler.addToIndexBouquet("radio")
-                        if config.plugins.speedyservicescanupdates.clear_bouquet.value:
-                            bouquet_handler.createSSUBouquet(newRadioServices, "radio")
-                        else:
-                            if bouquet_handler.doesSSUBouquetFileExists("radio"):
-                                bouquet_handler.appendToSSUBouquet(newRadioServices, "radio")
-                            else:
-                                bouquet_handler.createSSUBouquet(newRadioServices, "radio")
+                        _apply("radio", newRadioServices)
 
-                    bouquet_handler.reloadBouquets()
+                    try:
+                        bh.reloadBouquets()
+                    except Exception:
+                        pass
                     preScanDB = None
     except Exception as e:
         log("[speedyServiceScanUpdates] Fehler in ServiceScan_execEnd: %s" % e)
 
     try:
-        baseServiceScan_execEnd(self)
+        if baseServiceScan_execEnd:
+            baseServiceScan_execEnd(self)
     except Exception as e:
         log("[speedyServiceScanUpdates] Fehler beim Aufruf baseServiceScan_execEnd: %s" % e)
 
@@ -207,6 +222,7 @@ def get_remote_version():
         return None
 
 def download_and_install_update(session):
+    tmp_dir = None
     try:
         tmp_dir = tempfile.mkdtemp()
         zip_path = os.path.join(tmp_dir, "plugin_update.zip")
@@ -238,9 +254,8 @@ def download_and_install_update(session):
         for item in os.listdir(extracted_root):
             src_path = os.path.join(extracted_root, item)
             dest_path = os.path.join(PLUGIN_PATH, item)
-
             if os.path.isdir(src_path):
-                shutil.copytree(src_path, dest_path, dirs_exist_ok=True)
+                copytree_compat(src_path, dest_path)
             else:
                 shutil.copy2(src_path, dest_path)
 
@@ -282,10 +297,11 @@ def download_and_install_update(session):
         except Exception:
             pass
     finally:
-        try:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        if tmp_dir:
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 # ===== Autostart Hook =====
 def autostart(reason, **kwargs):
@@ -351,6 +367,13 @@ def menu(menuid, **kwargs):
 
 # ===== Plugin Descriptor =====
 def Plugins(**kwargs):
+    # Konfiguration hinzufügen
+    if not hasattr(config.plugins, "speedyservicescanupdates"):
+        config.plugins.speedyservicescanupdates = ConfigSubsection()
+        config.plugins.speedyservicescanupdates.add_new_tv_services = ConfigYesNo(default=True)
+        config.plugins.speedyservicescanupdates.add_new_radio_services = ConfigYesNo(default=True)
+        config.plugins.speedyservicescanupdates.clear_bouquet = ConfigYesNo(default=False)
+
     return [
         PluginDescriptor(where=[PluginDescriptor.WHERE_SESSIONSTART, PluginDescriptor.WHERE_AUTOSTART],
                          fnc=autostart),
