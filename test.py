@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-import os
 import polib
 from deep_translator import GoogleTranslator
 from pathlib import Path
 
 # --- Konfiguration ---
-source_root = r"C:\speedyServiceScanUpdates\locale"  # Wurzelverzeichnis für die Suche nach .po-Dateien
+source_root = r"C:\speedyServiceScanUpdates\locale\de"  # Deutsch als Ausgang
 languages = {
     "en": "English",
     "tr": "Turkish",
@@ -14,42 +13,50 @@ languages = {
     "ar": "Arabic"
 }
 
-# --- Translator initialisieren ---
-translator = GoogleTranslator(source='auto')
-
-# Alle .po-Dateien rekursiv finden
+# Alle .po-Dateien unter Deutsch rekursiv suchen
 po_files = list(Path(source_root).rglob("*.po"))
-
 if not po_files:
     raise FileNotFoundError(f"Keine .po-Dateien gefunden in {source_root}")
 
+# Translator vorbereiten
+translator = GoogleTranslator(source='de')  # Deutsch als Ausgangssprache
+
 for po_path in po_files:
     po = polib.pofile(po_path)
+    relative_subpath = po_path.relative_to(source_root).parent
 
-    # Berechne relativen Pfad vom Quellordner
-    relative_path = po_path.relative_to(source_root)
     for lang_code, lang_name in languages.items():
-        # Zielordner unter Beibehaltung der Struktur
-        target_path = Path(source_root) / lang_code / relative_path.parent
+        target_path = Path(source_root).parent / lang_code / relative_subpath
         target_path.mkdir(parents=True, exist_ok=True)
 
         translated_po = polib.POFile()
         translated_po.metadata = po.metadata.copy()
 
-        translation_cache = {}
-
         print(f"Übersetze {po_path} nach {lang_name}...")
 
         for entry in po:
-            if entry.msgid not in translation_cache:
-                try:
-                    translation_cache[entry.msgid] = translator.translate(entry.msgid, target=lang_code)
-                except Exception as e:
-                    print(f"Fehler bei Übersetzung '{entry.msgid}': {e}")
-                    translation_cache[entry.msgid] = entry.msgid
+            try:
+                translated_text = translator.translate(entry.msgid, target=lang_code)
+            except Exception as e:
+                print(f"Fehler bei Übersetzung von '{entry.msgid}': {e}")
+                translated_text = entry.msgid  # Fallback: Originaltext
 
-            translated_po.append(polib.POEntry(msgid=entry.msgid, msgstr=translation_cache[entry.msgid]))
+            # msgid bleibt Deutsch, msgstr wird übersetzt
+            translated_entry = polib.POEntry(
+                msgid=entry.msgid,
+                msgstr=translated_text,
+                occurrences=entry.occurrences,  # Pfade zu den Python-Dateien bleiben erhalten
+                flags=entry.flags,
+                comment=entry.comment,
+                tcomment=entry.tcomment,
+                previous_msgctxt=entry.previous_msgctxt,
+                previous_msgid=entry.previous_msgid,
+                previous_msgid_plural=entry.previous_msgid_plural
+            )
 
+            translated_po.append(translated_entry)
+
+        # Speicherpfade für .po und .mo
         po_file_path = target_path / po_path.name
         mo_file_path = target_path / po_path.name.replace(".po", ".mo")
         translated_po.save(po_file_path)
