@@ -1,19 +1,15 @@
 # -*- coding: utf-8 -*-
-from __future__ import print_function, unicode_literals
+from __future__ import print_function, division, unicode_literals
 import os
-import sys
-import zipfile
 import shutil
-import traceback
-import time
-import gettext
+import zipfile
+import io
+import sys
 
 try:
     import requests
 except ImportError:
     requests = None
-
-import io  # Für Python2/3 kompatibles open
 
 # --- Plugin-Pfad dynamisch ermitteln ---
 plugin_path = None
@@ -26,33 +22,33 @@ for base in (
         plugin_path = possible
         break
 
-# ===== Lokalisierung für .mo Dateien =====
-locale_dir = os.path.join(plugin_path, "locale") if plugin_path else None
-lang = u"en"
-try:
-    import locale
-    lang = locale.getdefaultlocale()[0]
-except Exception:
-    pass
-
-if locale_dir and os.path.isdir(locale_dir):
-    gettext.bindtextdomain("speedyservicescanupdates", locale_dir)
-    gettext.textdomain("speedyservicescanupdates")
-    _ = gettext.gettext
-else:
-    _ = lambda s: s  # Fallback: keine Übersetzung
-
 # --- Enigma2 imports ---
-from enigma import ePixmap, eLabel, getDesktop, eTimer
+from enigma import ePixmap, getDesktop, eTimer
 from Screens.Screen import Screen
 from Screens.MessageBox import MessageBox
+from Screens.Standby import TryQuitMainloop
 from Components.ConfigList import ConfigListScreen
 from Components.ActionMap import ActionMap
+from Components.Button import Button
 from Components.Label import Label
+from Components.ProgressBar import ProgressBar
 from Components.config import config, ConfigSubsection, ConfigYesNo, getConfigListEntry
 from Plugins.Plugin import PluginDescriptor
 from Tools.Directories import resolveFilename, SCOPE_CONFIG
-from Components.Button import Button
+
+from . import _
+
+# ===== Constants / Paths =====
+UPDATE_URL = "https://github.com/speedy005/speedyServiceScanUpdates/archive/refs/heads/main.zip"
+DOWNLOAD_PATH = "/tmp/ServiceScanUpdates-main.zip"
+EXTRACT_DIR = "/tmp/ServiceScanUpdates"
+TARGET_DIR = "/usr/lib/enigma2/python/Plugins/Extensions/speedyServiceScanUpdates"
+
+# ===== Config =====
+config.plugins.speedyservicescanupdates = ConfigSubsection()
+config.plugins.speedyservicescanupdates.add_new_tv_services = ConfigYesNo(default=True)
+config.plugins.speedyservicescanupdates.add_new_radio_services = ConfigYesNo(default=True)
+config.plugins.speedyservicescanupdates.clear_bouquet = ConfigYesNo(default=False)
 
 # ===== Version =====
 def read_version():
@@ -84,132 +80,167 @@ except ImportError:
     except ImportError:
         pass
 
-# ===== Update Screen Import =====
-try:
-    from .SSUUpdateScreen import SSUUpdateScreen
-except ImportError:
-    SSUUpdateScreen = None
-
-# ===== Config =====
-config.plugins.speedyservicescanupdates = ConfigSubsection()
-config.plugins.speedyservicescanupdates.add_new_tv_services = ConfigYesNo(default=True)
-config.plugins.speedyservicescanupdates.add_new_radio_services = ConfigYesNo(default=True)
-config.plugins.speedyservicescanupdates.clear_bouquet = ConfigYesNo(default=False)
-
-# ===== SSUSetupScreen =====
-class SSUSetupScreen(ConfigListScreen, Screen):
+# ===== SSUUpdateScreen =====
+class SSUUpdateScreen(Screen):
     def __init__(self, session):
         Screen.__init__(self, session)
-        ConfigListScreen.__init__(self, [], session=session)
         self.session = session
-        w = getDesktop(0).size().width()
+        desktop = getDesktop(0)
+        width = desktop.size().width()
 
-        # --- Skin definieren ---
-        if w >= 1920:
-            self.skin = u"""<screen name="SSUSetupScreen" position="center,170" size="1200,820" title="speedy Service Scan Setup" backgroundColor="black">
-                <ePixmap pixmap="skin_default/buttons/red.png" position="10,5" size="5,70" scale="stretch" alphatest="on" />
-                <ePixmap pixmap="skin_default/buttons/green.png" position="314,5" size="5,70" scale="stretch" alphatest="on" />
+        # Skin abhängig von der Auflösung setzen
+        if width >= 1920:
+            self.skin = u"""<screen name="SSUUpdateScreen" position="center,170" size="1200,820" title="speedy Service Scan Updates">
+                <widget name="progress" position="10,100" size="1180,50" />
+                <widget name="status" position="12,160" size="1180,250" font="Regular;30" valign="center" halign="center" zPosition="1" />
+                <widget name="progresstext" position="12,415" size="1180,350" font="Regular;30" valign="center" halign="center" />
+                <widget name="key_red" position="3,4" size="295,70" font="Regular;30" halign="center" valign="center" />
+                <widget name="key_green" foregroundColor="green" position="305,3" size="300,70" font="Regular;30" halign="center" valign="center" />
+                <widget name="key_yellow" foregroundColor="yellow" position="609,3" size="300,70" font="Regular;30" halign="center" valign="center" />
+                <widget name="key_blue" foregroundColor="blue" position="917,4" size="295,70" font="Regular;30" halign="center" valign="center" />
+                <widget name="version" position="488,769" size="200,30" font="Regular;30" valign="center" halign="center" zPosition="1" />
                 <eLabel text="HELP" position="1110,753" size="80,35" backgroundColor="#777777" valign="center" halign="center" font="Regular;24" zPosition="5" />
-                <widget name="key_red" position="19,8" zPosition="1" size="295,70" font="Regular;30" halign="center" valign="center" backgroundColor="#9f1313" transparent="1" shadowColor="black" shadowOffset="-2,-2" />
-                <widget name="key_green" position="324,5" zPosition="1" size="300,70" font="Regular;30" halign="center" valign="center" foregroundColor="green" backgroundColor="#1f771f" transparent="1" shadowColor="black" shadowOffset="-2,-2" />
-                <widget name="config" position="10,90" itemHeight="35" size="1180,500" enableWrapAround="1" scrollbarMode="showOnDemand" />
-                <ePixmap pixmap="skin_default/div-h.png" position="10,650" zPosition="2" size="1180,2" />
-                <ePixmap pixmap="skin_default/buttons/yellow.png" position="630,7" size="5,70" scale="stretch" alphatest="on" />
-                <widget name="key_yellow" position="638,6" size="300,70" font="Regular;30" halign="center" valign="center" foregroundColor="yellow" />
-                <widget name="version" position="1040,600" size="150,50" font="Regular;30" valign="center" halign="left" />
-                <ePixmap pixmap="skin_default/buttons/blue.png" position="945,7" size="5,70" scale="stretch" alphatest="on" />
-                <widget name="key_blue" position="954,8" size="250,70" font="Regular;30" halign="center" valign="center" foregroundColor="blue" />
-                <widget name="help" position="10,655" size="1180,140" font="Regular;32" />
                 <ePixmap pixmap="skin_default/buttons/vkey_exit.png" position="1041,761" size="35,25" scale="stretch" alphatest="on" zPosition="6" />
+                <ePixmap pixmap="skin_default/buttons/blue.png" position="909,5" size="5,70" scale="stretch" alphatest="on" zPosition="1" />
+                <ePixmap pixmap="skin_default/buttons/yellow.png" position="601,4" size="5,70" scale="stretch" alphatest="on" zPosition="1" />
+                <ePixmap pixmap="skin_default/buttons/green.png" position="300,5" size="5,70" scale="stretch" alphatest="on" zPosition="1" />
+                <ePixmap pixmap="skin_default/buttons/red.png" position="5,5" size="5,70" scale="stretch" alphatest="on" zPosition="1" />
             </screen>"""
         else:
-            self.skin = u"""<screen name="SSUSetupScreen" position="center,120" size="900,530" title="speedy Service Scan Setup">
-                <ePixmap pixmap="skin_default/buttons/red.png" position="0,0" size="5,40" scale="stretch" alphatest="on" />
-                <ePixmap pixmap="skin_default/buttons/green.png" position="200,0" size="5,40" scale="stretch" alphatest="on" />
-                <ePixmap pixmap="skin_default/buttons/yellow.png" position="405,0" size="5,40" scale="stretch" alphatest="on" />
-                <ePixmap pixmap="skin_default/buttons/blue.png" position="610,0" size="5,40" scale="stretch" alphatest="on" />
-                <widget name="key_red" position="7,0" zPosition="1" size="200,40" font="Regular;22" halign="center" valign="center" backgroundColor="#9f1313" transparent="1" shadowColor="black" shadowOffset="-2,-2" />
-                <widget name="key_green" position="206,0" zPosition="1" size="200,40" font="Regular;22" halign="center" valign="center" foregroundColor="green" backgroundColor="#1f771f" transparent="1" shadowColor="black" shadowOffset="-2,-2" />
-                <widget name="key_yellow" position="414,1" size="200,40" font="Regular;22" halign="center" valign="center" foregroundColor="yellow" />
-                <widget name="key_blue" position="618,1" size="200,40" font="Regular;22" halign="center" valign="center" foregroundColor="blue" />
-                <widget name="config" position="5,50" itemHeight="30" size="900,390" enableWrapAround="1" scrollbarMode="showOnDemand" />
-                <ePixmap pixmap="skin_default/div-h.png" position="0,445" zPosition="2" size="900,2" />
-                <widget name="version" position="708,408" size="200,30" font="Regular;22" valign="center" halign="left" zPosition="1" />
-                <widget name="help" position="7,450" size="888,65" font="Regular;22" />
-                <eLabel text="HELP" position="828,6" size="80,35" backgroundColor="#777777" valign="center" halign="center" font="Regular;24" zPosition="5" />
-                <ePixmap pixmap="skin_default/buttons/vkey_exit.png" position="857,482" size="35,25" scale="stretch" alphatest="on" zPosition="6" />
+            self.skin = u"""<screen name="SSUUpdateScreen" position="410,170" size="1100,820" title="speedy Service Scan Updates">
+                <widget name="progress" position="10,100" size="1050,50" />
+                <widget name="status" position="10,160" size="1050,200" font="Regular;30" valign="center" halign="center" />
+                <widget name="progresstext" position="11,373" size="1050,297" font="Regular;30" valign="center" halign="center" />
+                <widget name="key_red" position="13,2" size="250,70" font="Regular;30" halign="center" valign="center" />
+                <widget name="key_green" foregroundColor="green" position="277,3" size="250,70" font="Regular;30" halign="center" valign="center" />
+                <widget name="key_yellow" foregroundColor="yellow" position="538,4" size="250,70" font="Regular;30" halign="center" valign="center" />
+                <widget name="key_blue" position="798,5" foregroundColor="blue" size="250,70" font="Regular;30" halign="center" valign="center" />
+                <widget name="version" position="364,752" size="300,50" font="Regular;30" valign="center" halign="center" />
+                <eLabel text="HELP" position="930,761" size="80,35" backgroundColor="#777777" valign="center" halign="center" font="Regular;24" zPosition="5" />
+                <ePixmap pixmap="skin_default/buttons/vkey_exit.png" position="841,761" size="35,25" scale="stretch" alphatest="on" zPosition="6" />
+                <ePixmap pixmap="skin_default/buttons/blue.png" position="791,5" size="5,70" scale="stretch" alphatest="on" />
+                <ePixmap pixmap="skin_default/buttons/yellow.png" position="529,2" size="5,70" scale="stretch" alphatest="on" />
+                <ePixmap pixmap="skin_default/buttons/green.png" position="269,2" size="5,70" scale="stretch" alphatest="on" />
+                <ePixmap pixmap="skin_default/buttons/red.png" position="5,5" size="5,70" scale="stretch" alphatest="on" />
             </screen>"""
 
-        # --- Widgets ---
-        self["version"] = Label(u"v %s" % version)
-        self["key_red"] = Button(_("Cancel"))
-        self["key_green"] = Button(_("Save"))
-        self["key_yellow"] = Button(_("Restore Default"))
-        self["key_blue"] = Button(_("Update"))
-        self["help"] = Label(_("Configure the update options."))
+        # GUI-Komponenten initialisieren
+        self['status'] = Label(_("Bereit"))
+        self['progress'] = ProgressBar()
+        self['progresstext'] = Label("")
+        self['key_red'] = Button(_("Beenden"))
+        self['key_green'] = Button(_("Start"))
+        self['key_yellow'] = Button(_("Abbrechen"))
+        self['key_blue'] = Button(_("Update prüfen"))
+        self['version'] = Label(version)
 
-        # --- Aktionen ---
-        self['actions'] = ActionMap(
-            ['ColorActions', 'OkCancelActions', 'HelpActions', 'EPGSelectActions'],
-            {
-                'red': self.cancel,
-                'green': self.save,
-                'yellow': self.restore_default,
-                'blue': self.openUpdate,
-                'ok': self.save,
-                'cancel': self.cancel,
-                'help': self.showHelp,
-                'epg': self.showHelp
-            },
-            -1
-        )
+        # Aktionen definieren
+        self['actions'] = ActionMap(['ColorActions', 'OkCancelActions'], {
+            'red': self.exit,
+            'green': self.start_update,
+            'yellow': self.cancel,
+            'blue': self.check_update,
+            'ok': self.start_update,
+            'cancel': self.exit
+        }, -1)
 
-        self.onLayoutFinish.append(self.populateList)
-        self["config"].onSelectionChanged.append(self.updateHelp)
+        self.download_progress = 0
+        self.timer = eTimer()
+        self.timer.callback.append(self._update_gui)
+        self.timer.start(100, True)
 
-    # ===== Methoden =====
-    def populateList(self):
-        self.list = [
-            getConfigListEntry(
-                _("Add new TV services"),
-                config.plugins.speedyservicescanupdates.add_new_tv_services,
-                _("Create 'Service Scan Updates' bouquet for new TV services?")
-            ),
-            getConfigListEntry(
-                _("Add new radio services"),
-                config.plugins.speedyservicescanupdates.add_new_radio_services,
-                _("Create 'Service Scan Updates' bouquet for new radio services?")
-            ),
-            getConfigListEntry(
-                _("Clear bouquet at each search"),
-                config.plugins.speedyservicescanupdates.clear_bouquet,
-                _("Empty the 'Service Scan Updates' bouquet on every scan, otherwise the new services will be appended?")
-            )
-        ]
-        for entry in self.list:
-            entry[1].helpText = entry[2]
-        self["config"].list = self.list
+    # --- GUI aktualisieren ---
+    def _update_gui(self):
+        self['progress'].setValue(min(self.download_progress, 100))
+        self['progresstext'].setText(u"{}%".format(min(self.download_progress, 100)))
 
-    def restore_default(self):
-        self.session.open(MessageBox, _("Default settings restored!"), MessageBox.TYPE_INFO, 3)
+    def exit(self):
         self.close()
 
-    def openUpdate(self):
-        if SSUUpdateScreen:
-            self.session.open(SSUUpdateScreen)
-        else:
-            _safe_msg(self.session, _("Update screen not available."), MessageBox.TYPE_ERROR, 5)
+    # --- Update abschließen ---
+    def _finish_update(self):
+        try:
+            update_folder = os.path.join(EXTRACT_DIR, "speedyServiceScanUpdates-main", "speedyServiceScanUpdates")
+            if not os.path.isdir(update_folder):
+                self['status'].setText(_("Fehler: Ordner speedyServiceScanUpdates nicht gefunden."))
+                return
+
+            if not os.path.isdir(TARGET_DIR):
+                os.makedirs(TARGET_DIR)
+
+            # Dateien kopieren (Python2/3 kompatibel)
+            for item in os.listdir(update_folder):
+                s = os.path.join(update_folder, item)
+                d = os.path.join(TARGET_DIR, item)
+                if os.path.isdir(s):
+                    if os.path.exists(d):
+                        shutil.rmtree(d)
+                    shutil.copytree(s, d)
+                else:
+                    shutil.copy2(s, d)
+
+            self['status'].setText(_("Update erfolgreich abgeschlossen."))
+            self.session.openWithCallback(
+                self.restartGUI,
+                MessageBox,
+                _("Update abgeschlossen. GUI neu starten?"),
+                MessageBox.TYPE_YESNO
+            )
+
+        except Exception as e:
+            print("Fehler beim Abschluss des Updates:", str(e))
+            self['status'].setText(_("Update konnte nicht abgeschlossen werden."))
+
+    def check_update(self):
+        if not requests:
+            self['status'].setText(_("Requests-Modul fehlt"))
+            return
+        self['status'].setText(_("Prüfe auf Updates..."))
+        try:
+            r = requests.get("https://raw.githubusercontent.com/speedy005/speedyServiceScanUpdates/main/version.txt", timeout=10)
+            if r.status_code == 200:
+                remote_version = r.text.strip()
+                if remote_version > version:
+                    self['status'].setText(_("Update verfügbar"))
+                else:
+                    self['status'].setText(_("Kein Update verfügbar"))
+            else:
+                self['status'].setText(_("Kein Update verfügbar"))
+        except Exception as e:
+            print("Fehler beim Update-Check:", str(e))
+            self['status'].setText(_("Update-Check fehlgeschlagen."))
+
+    def start_update(self):
+        if not requests:
+            self['status'].setText(_("Requests-Modul fehlt"))
+            return
+        self['status'].setText(_("Update wird heruntergeladen..."))
+        try:
+            r = requests.get(UPDATE_URL, stream=True, timeout=20)
+            if r.status_code == 200:
+                total_size = int(r.headers.get('Content-Length', 0))
+                self.download_progress = 0
+                with open(DOWNLOAD_PATH, 'wb') as f:
+                    for data in r.iter_content(chunk_size=1024):
+                        if data:
+                            f.write(data)
+                            self.download_progress += len(data) * 100 // max(total_size, 1)
+                            self._update_gui()
+                with zipfile.ZipFile(DOWNLOAD_PATH, 'r') as zip_ref:
+                    zip_ref.extractall(EXTRACT_DIR)
+                self._finish_update()
+            else:
+                self['status'].setText(_("Download fehlgeschlagen"))
+        except Exception as e:
+            print("Fehler beim Download:", str(e))
+            self['status'].setText(_("Download fehlgeschlagen"))
 
     def cancel(self):
+        self['status'].setText(_("Update abgebrochen"))
         self.close()
 
-    def save(self):
-        self.session.open(MessageBox, _("Changes saved!"), MessageBox.TYPE_INFO, 3)
-        self.close()
-
-    def showHelp(self):
-        self.session.open(MessageBox, _("Configure the update options."), MessageBox.TYPE_INFO, 5)
-
-    def updateHelp(self):
-        if self["config"].getCurrent():
-            self["help"].setText(self["config"].getCurrent()[1].helpText)
+    def restartGUI(self, answer):
+        if answer:
+            self.session.open(TryQuitMainloop, 3)
+        else:
+            self.close()
