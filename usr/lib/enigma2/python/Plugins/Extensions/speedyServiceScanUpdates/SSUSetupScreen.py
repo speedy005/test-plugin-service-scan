@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from __future__ import print_function, unicode_literals
 import os
 import sys
 import zipfile
@@ -6,6 +7,7 @@ import shutil
 import traceback
 import time
 import gettext
+import codecs
 
 try:
     import requests
@@ -57,7 +59,7 @@ def read_version():
         return "Unknown version"
     vf = os.path.join(plugin_path, "version.txt")
     try:
-        with open(vf, "r", encoding="utf-8") as f:
+        with codecs.open(vf, "r", encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
         return "Unknown version"
@@ -133,8 +135,8 @@ class SSUSetupScreen(ConfigListScreen, Screen):
                 <ePixmap pixmap="skin_default/div-h.png" position="0,445" zPosition="2" size="900,2" />
                 <widget name="version" position="708,408" size="200,30" font="Regular;22" valign="center" halign="left" zPosition="1" />
                 <widget name="help" position="7,450" size="888,65" font="Regular;22" />
-<eLabel text="HELP" position="828,6" size="80,35" backgroundColor="#777777" valign="center" halign="center" font="Regular;24" zPosition="5" />
-<ePixmap pixmap="skin_default/buttons/vkey_exit.png" position="857,482" size="35,25" scale="stretch" alphatest="on" zPosition="6" />
+                <eLabel text="HELP" position="828,6" size="80,35" backgroundColor="#777777" valign="center" halign="center" font="Regular;24" zPosition="5" />
+                <ePixmap pixmap="skin_default/buttons/vkey_exit.png" position="857,482" size="35,25" scale="stretch" alphatest="on" zPosition="6" />
             </screen>"""
 
         # --- Widgets ---
