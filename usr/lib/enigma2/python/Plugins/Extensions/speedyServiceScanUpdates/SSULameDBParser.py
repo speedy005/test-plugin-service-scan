@@ -2,6 +2,7 @@
 import sys
 import re
 from enigma import eDVBDB, eServiceReference
+from gettext import gettext as _  # gettext import
 
 PY2 = sys.version_info[0] == 2
 PY3 = sys.version_info[0] == 3
@@ -18,7 +19,7 @@ class SSULameDBParser:
 
     def load(self):
         try:
-            print("[ServiceScanUpdates] Reading file: " + self.filename)
+            print(_("[ServiceScanUpdates] Reading file: %s") % self.filename)
             import codecs
             with codecs.open(self.filename, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
@@ -27,11 +28,11 @@ class SSULameDBParser:
             elif lines and "/4/" in lines[0]:
                 self.version = 4
             else:
-                print("[ServiceScanUpdates] Unsupported lamedb version")
+                print(_("[ServiceScanUpdates] Unsupported lamedb version"))
                 lines = None
             return lines
         except Exception as e:
-            print("[ServiceScanUpdates] Exception reading lamedb: " + str(e))
+            print(_("[ServiceScanUpdates] Exception reading lamedb: %s") % str(e))
             return None
 
     def parse(self, lines):
@@ -44,7 +45,7 @@ class SSULameDBParser:
         self.transponders.clear()
         self.services.clear()
 
-        print("[ServiceScanUpdates] Parsing content of file: " + self.filename)
+        print(_("[ServiceScanUpdates] Parsing content of file: %s") % self.filename)
         for line in lines:
             line = line.rstrip('\n')
             if PY2:
@@ -92,7 +93,13 @@ class SSULameDBParser:
                     transport_stream_id = re.sub("^0+", "", transport_stream_id)
                     original_network_id = re.sub("^0+", "", original_network_id)
                     service_type = format(int(service_type), "x")
-                    service_ref = "1:0:%s:%s:%s:%s:%s:0:0:0:" % (service_type.upper(), service_id.upper(), transport_stream_id.upper(), original_network_id.upper(), dvb_namespace.upper())
+                    service_ref = "1:0:%s:%s:%s:%s:%s:0:0:0:" % (
+                        service_type.upper(),
+                        service_id.upper(),
+                        transport_stream_id.upper(),
+                        original_network_id.upper(),
+                        dvb_namespace.upper()
+                    )
 
                     self.services[service_ref] = {
                         'service_id': service_id,
