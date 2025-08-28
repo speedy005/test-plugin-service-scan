@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from __future__ import print_function, unicode_literals
 import sys
 import re
 import gettext
@@ -6,9 +7,6 @@ from enigma import eDVBDB, eServiceReference
 
 # gettext vorbereiten
 _ = gettext.gettext
-
-PY2 = sys.version_info[0] == 2
-PY3 = sys.version_info[0] == 3
 
 FLAG_SERVICE_NEW_FOUND = 64
 
@@ -51,9 +49,7 @@ class SSULameDBParser:
 
         print(_("[ServiceScanUpdates] Parsing content of file: ") + self.filename)
         for line in lines:
-            line = line.rstrip('\n')
-            if PY2:
-                line = line.encode('utf-8')
+            line = line.rstrip('\n')  # Py2 & Py3: Unicode korrekt
 
             if line == "end":
                 reading_transponders = False
@@ -90,15 +86,16 @@ class SSULameDBParser:
                     else:
                         service_id, dvb_namespace, transport_stream_id, original_network_id, service_type, service_number, source_id = parts
 
-                    transponder = "%s:%s:%s" % (dvb_namespace, transport_stream_id, original_network_id)
+                    transponder = "{}:{}:{}".format(dvb_namespace, transport_stream_id, original_network_id)
 
                     service_id = re.sub("^0+", "", service_id)
                     dvb_namespace = re.sub("^0+", "", dvb_namespace)
                     transport_stream_id = re.sub("^0+", "", transport_stream_id)
                     original_network_id = re.sub("^0+", "", original_network_id)
-                    service_type = format(int(service_type), "x")
-                    service_ref = "1:0:%s:%s:%s:%s:%s:0:0:0:" % (
-                        service_type.upper(),
+                    service_type_hex = format(int(service_type), "x")
+
+                    service_ref = "1:0:{}:{}:{}:{}:{}:0:0:0:".format(
+                        service_type_hex.upper(),
                         service_id.upper(),
                         transport_stream_id.upper(),
                         original_network_id.upper(),
