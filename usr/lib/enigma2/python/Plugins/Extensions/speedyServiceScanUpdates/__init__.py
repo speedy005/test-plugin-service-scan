@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
+from __future__ import print_function, unicode_literals  # Für Py2 Unicode-Kompatibilität
 from Components.config import config, ConfigSubsection, ConfigYesNo
 from Components.Language import language
 from Tools.Directories import resolveFilename, SCOPE_PLUGINS, SCOPE_LANGUAGE
 import os
 import gettext
+import sys
 
 PluginLanguageDomain = "speedyServiceScanUpdates"
 
 # Dynamisch den Pfad ermitteln (funktioniert für Extensions und SystemPlugins)
-plugin_path = resolveFilename(SCOPE_PLUGINS, "Extensions/" + PluginLanguageDomain + "/locale/")
+plugin_path = resolveFilename(SCOPE_PLUGINS, str("Extensions/" + PluginLanguageDomain + "/locale/"))
 if not os.path.exists(plugin_path):
-    plugin_path = resolveFilename(SCOPE_PLUGINS, "SystemPlugins/" + PluginLanguageDomain + "/locale/")
+    plugin_path = resolveFilename(SCOPE_PLUGINS, str("SystemPlugins/" + PluginLanguageDomain + "/locale/"))
 
 PluginLanguagePath = plugin_path
 
@@ -26,16 +28,31 @@ def isDreamOS():
 
 def localeInit():
     lang = language.getLanguage()[:2]
-    os.environ["LANGUAGE"] = lang
+
+    # Py2/3 kompatibles Setzen der Umgebungsvariable
+    if sys.version_info[0] < 3:
+        os.environ["LANGUAGE"] = str(lang.encode("utf-8"))
+    else:
+        os.environ["LANGUAGE"] = str(lang)
+
     gettext.bindtextdomain("enigma2", resolveFilename(SCOPE_LANGUAGE))
     gettext.textdomain("enigma2")
     gettext.bindtextdomain(PluginLanguageDomain, PluginLanguagePath)
 
 
 def _(txt):
+    # Py2/3 Unicode-sicher
+    if sys.version_info[0] < 3 and isinstance(txt, unicode):
+        txt = txt.encode("utf-8")
+
     t = gettext.dgettext(PluginLanguageDomain, txt)
     if t == txt:
         t = gettext.gettext(txt)
+
+    # Py2: Rückgabe als Unicode
+    if sys.version_info[0] < 3:
+        t = t.decode("utf-8") if isinstance(t, str) else t
+
     return t
 
 
