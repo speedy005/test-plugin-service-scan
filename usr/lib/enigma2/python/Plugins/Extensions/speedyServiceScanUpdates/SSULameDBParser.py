@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
 import sys
 import re
+import gettext
 from enigma import eDVBDB, eServiceReference
-from gettext import gettext as _  # gettext import
+
+# gettext vorbereiten
+_ = gettext.gettext
 
 PY2 = sys.version_info[0] == 2
 PY3 = sys.version_info[0] == 3
 
 FLAG_SERVICE_NEW_FOUND = 64
+
 
 class SSULameDBParser:
     def __init__(self, filename):
@@ -19,7 +23,7 @@ class SSULameDBParser:
 
     def load(self):
         try:
-            print(_("[ServiceScanUpdates] Reading file: %s") % self.filename)
+            print(_("[ServiceScanUpdates] Reading file: ") + self.filename)
             import codecs
             with codecs.open(self.filename, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
@@ -32,7 +36,7 @@ class SSULameDBParser:
                 lines = None
             return lines
         except Exception as e:
-            print(_("[ServiceScanUpdates] Exception reading lamedb: %s") % str(e))
+            print(_("[ServiceScanUpdates] Exception reading lamedb: ") + str(e))
             return None
 
     def parse(self, lines):
@@ -45,7 +49,7 @@ class SSULameDBParser:
         self.transponders.clear()
         self.services.clear()
 
-        print(_("[ServiceScanUpdates] Parsing content of file: %s") % self.filename)
+        print(_("[ServiceScanUpdates] Parsing content of file: ") + self.filename)
         for line in lines:
             line = line.rstrip('\n')
             if PY2:
