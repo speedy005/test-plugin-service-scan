@@ -7,12 +7,13 @@ import shutil
 import traceback
 import time
 import gettext
-import codecs
 
 try:
     import requests
 except ImportError:
     requests = None
+
+import io  # Für Python2/3 kompatibles open
 
 # --- Plugin-Pfad dynamisch ermitteln ---
 plugin_path = None
@@ -27,7 +28,7 @@ for base in (
 
 # ===== Lokalisierung für .mo Dateien =====
 locale_dir = os.path.join(plugin_path, "locale") if plugin_path else None
-lang = "en"
+lang = u"en"
 try:
     import locale
     lang = locale.getdefaultlocale()[0]
@@ -56,13 +57,13 @@ from Components.Button import Button
 # ===== Version =====
 def read_version():
     if not plugin_path:
-        return "Unknown version"
+        return u"Unknown version"
     vf = os.path.join(plugin_path, "version.txt")
     try:
-        with codecs.open(vf, "r", encoding="utf-8") as f:
+        with io.open(vf, "r", encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
-        return "Unknown version"
+        return u"Unknown version"
 
 version = read_version()
 
@@ -105,7 +106,7 @@ class SSUSetupScreen(ConfigListScreen, Screen):
 
         # --- Skin definieren ---
         if w >= 1920:
-            self.skin = """<screen name="SSUSetupScreen" position="center,170" size="1200,820" title="speedy Service Scan Setup" backgroundColor="black">
+            self.skin = u"""<screen name="SSUSetupScreen" position="center,170" size="1200,820" title="speedy Service Scan Setup" backgroundColor="black">
                 <ePixmap pixmap="skin_default/buttons/red.png" position="10,5" size="5,70" scale="stretch" alphatest="on" />
                 <ePixmap pixmap="skin_default/buttons/green.png" position="314,5" size="5,70" scale="stretch" alphatest="on" />
                 <eLabel text="HELP" position="1110,753" size="80,35" backgroundColor="#777777" valign="center" halign="center" font="Regular;24" zPosition="5" />
@@ -122,7 +123,7 @@ class SSUSetupScreen(ConfigListScreen, Screen):
                 <ePixmap pixmap="skin_default/buttons/vkey_exit.png" position="1041,761" size="35,25" scale="stretch" alphatest="on" zPosition="6" />
             </screen>"""
         else:
-            self.skin = """<screen name="SSUSetupScreen" position="center,120" size="900,530" title="speedy Service Scan Setup">
+            self.skin = u"""<screen name="SSUSetupScreen" position="center,120" size="900,530" title="speedy Service Scan Setup">
                 <ePixmap pixmap="skin_default/buttons/red.png" position="0,0" size="5,40" scale="stretch" alphatest="on" />
                 <ePixmap pixmap="skin_default/buttons/green.png" position="200,0" size="5,40" scale="stretch" alphatest="on" />
                 <ePixmap pixmap="skin_default/buttons/yellow.png" position="405,0" size="5,40" scale="stretch" alphatest="on" />
@@ -140,7 +141,7 @@ class SSUSetupScreen(ConfigListScreen, Screen):
             </screen>"""
 
         # --- Widgets ---
-        self["version"] = Label(_("v %s") % version)
+        self["version"] = Label(u"v %s" % version)
         self["key_red"] = Button(_("Cancel"))
         self["key_green"] = Button(_("Save"))
         self["key_yellow"] = Button(_("Restore Default"))
@@ -212,140 +213,3 @@ class SSUSetupScreen(ConfigListScreen, Screen):
     def updateHelp(self):
         if self["config"].getCurrent():
             self["help"].setText(self["config"].getCurrent()[1].helpText)
-
-    def checkUpdate(self):
-        if SSUUpdateScreen:
-            self.session.open(SSUUpdateScreen, show_only=True)
-        else:
-            _safe_msg(self.session, _("Update screen not available."), MessageBox.TYPE_ERROR, 5)
-
-# ===== ServiceScan Hooks / Autostart =====
-_base_execBegin = None
-_base_execEnd = None
-_preScanDB = None
-
-try:
-    from .SSULameDBParser import SSULameDBParser
-except Exception:
-    SSULameDBParser = None
-
-def _has(d, k):
-    try:
-        return k in d
-    except Exception:
-        return False
-
-def ServiceScan_execBegin_hook(self, *args, **kwargs):
-    global _preScanDB
-    if SSULameDBParser and not _preScanDB:
-        add_tv = getattr(config.plugins.speedyservicescanupdates.add_new_tv_services, "value", False)
-        add_radio = getattr(config.plugins.speedyservicescanupdates.add_new_radio_services, "value", False)
-        if add_tv or add_radio:
-            try:
-                _preScanDB = SSULameDBParser(resolveFilename(SCOPE_CONFIG) + "/lamedb")
-            except Exception:
-                _preScanDB = None
-    if _base_execBegin:
-        _base_execBegin(self, *args, **kwargs)
-
-def ServiceScan_execEnd_hook(self, *args, **kwargs):
-    global _preScanDB
-    if _base_execEnd:
-        _base_execEnd(self, *args, **kwargs)
-    if not SSULameDBParser:
-        return
-    add_tv = getattr(config.plugins.speedyservicescanupdates.add_new_tv_services, "value", False)
-    add_radio = getattr(config.plugins.speedyservicescanupdates.add_new_radio_services, "value", False)
-    if not (add_tv or add_radio):
-        return
-    if not _preScanDB:
-        return
-    postScanDB = SSULameDBParser(resolveFilename(SCOPE_CONFIG) + "/lamedb")
-    postServices = postScanDB.getServices()
-    preServices = _preScanDB.getServices()
-    newTV, newRadio = [], []
-    for sref in postServices.keys():
-        if not _has(preServices, sref):
-            if SSULameDBParser.isVideoService(sref):
-                newTV.append(sref)
-            elif SSULameDBParser.isRadioService(sref):
-                newRadio.append(sref)
-    if (not newTV) and (not newRadio):
-        return
-    from .SSUBouquetHandler import SSUBouquetHandler
-    bh = SSUBouquetHandler()
-    def _apply(side, items):
-        if not items:
-            return
-        bh.addToIndexBouquet(side)
-        if config.plugins.speedyservicescanupdates.clear_bouquet.value:
-            bh.createSSUBouquet(items, side)
-        else:
-            if bh.doesSSUBouquetFileExists(side):
-                bh.appendToSSUBouquet(items, side)
-            else:
-                bh.createSSUBouquet(items, side)
-    if add_tv:
-        _apply("tv", newTV)
-    if add_radio:
-        _apply("radio", newRadio)
-    try:
-        bh.reloadBouquets()
-    except Exception:
-        pass
-    _preScanDB = None
-
-def _autostart(reason, **kwargs):
-    global _base_execBegin, _base_execEnd
-    if reason == 0 and "session" in kwargs:
-        if ServiceScan is None:
-            return
-        if _base_execBegin is None and hasattr(ServiceScan, "execBegin"):
-            _base_execBegin = ServiceScan.execBegin
-            ServiceScan.execBegin = ServiceScan_execBegin_hook
-        if _base_execEnd is None and hasattr(ServiceScan, "execEnd"):
-            _base_execEnd = ServiceScan.execEnd
-            ServiceScan.execEnd = ServiceScan_execEnd_hook
-
-# ===== Menu openers =====
-def openUpdate(session, **kwargs):
-    if SSUUpdateScreen:
-        session.open(SSUUpdateScreen)
-    else:
-        _safe_msg(session, _("Update screen not available."), MessageBox.TYPE_ERROR, 5)
-
-def openSetup(session, **kwargs):
-    session.open(SSUSetupScreen)
-
-def menuHook(menuid, **kwargs):
-    if menuid == "scan":
-        return [(_("ServiceScanUpdates"), openSetup, "servicescanupdates", 50)]
-    return []
-
-# ===== Plugin registration =====
-def Plugins(**kwargs):
-    items = [
-        PluginDescriptor(where=[PluginDescriptor.WHERE_SESSIONSTART, PluginDescriptor.WHERE_AUTOSTART], fnc=_autostart),
-        PluginDescriptor(name="SpeedyServiceScanUpdates",
-                         description=_("Download and install Service Scan Updates"),
-                         where=PluginDescriptor.WHERE_PLUGINMENU,
-                         icon="plugin.png",
-                         fnc=openUpdate),
-        PluginDescriptor(name="SpeedyServiceScanUpdates",
-                         description=_("Download and install Service Scan Updates"),
-                         where=PluginDescriptor.WHERE_EXTENSIONSMENU,
-                         icon="plugin.png",
-                         fnc=openUpdate),
-        PluginDescriptor(name="ServiceScanUpdates",
-                         description=_("Configure Service Scan Updates"),
-                         where=PluginDescriptor.WHERE_PLUGINMENU,
-                         icon="plugin.png",
-                         fnc=openSetup),
-        PluginDescriptor(name="ServiceScanUpdates",
-                         description=_("Configure Service Scan Updates"),
-                         where=PluginDescriptor.WHERE_EXTENSIONSMENU,
-                         icon="plugin.png",
-                         fnc=openSetup),
-        PluginDescriptor(where=PluginDescriptor.WHERE_MENU, fnc=menuHook)
-    ]
-    return items
